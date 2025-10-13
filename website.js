@@ -1,17 +1,26 @@
-// website.js (Versi Serverless/Vercel - Final dan Siap Deploy)
+// website.js (Modifikasi Final untuk Serverless/Vercel)
 
 const express = require('express');
-// Menggunakan fork yang lebih stabil untuk menghindari error 410/403
 const ytdl = require('@distube/ytdl-core'); 
 const app = express();
 
-// Middleware untuk memparsing data dari form (body)
 app.use(express.urlencoded({ extended: true }));
 
 // =================================================================
-// ENDPOINT UTAMA (FORM HTML)
+// TANGANI COOKIE (PENTING UNTUK MENGATASI PEMBLOKIRAN BOT)
 // =================================================================
+// Ambil cookie dari Environment Variable Vercel
+const COOKIES = process.env.YOUTUBE_COOKIES || '';
+const requestOptions = COOKIES ? { 
+    headers: {
+        'Cookie': COOKIES 
+    } 
+} : {};
+// =================================================================
+
+// Endpoint Utama (Tampilan Form)
 app.get('/', (req, res) => {
+    // KODE HTML LENGKAP UNTUK FORM UTAMA
     res.send(`
 <!DOCTYPE html>
 <html lang="id">
@@ -20,7 +29,7 @@ app.get('/', (req, res) => {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YouTube Downloader Vercel</title>
 
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjX0JMhjY6hW+ALEwIH" crossorigin="anonymous">
     
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 
@@ -93,9 +102,7 @@ app.get('/', (req, res) => {
     `);
 });
 
-// =================================================================
 // ENDPOINT DOWNLOAD (STREAMING LANGSUNG)
-// =================================================================
 app.post('/download', async (req, res) => {
     const { youtubeUrl, format } = req.body;
 
@@ -104,45 +111,52 @@ app.post('/download', async (req, res) => {
     }
 
     try {
-        // 1. Ambil informasi video untuk mendapatkan judul (Menggunakan try...catch tambahan)
+        // 1. Ambil informasi video - TERAPKAN COOKIE DI SINI
         let info;
         try {
-            info = await ytdl.getInfo(youtubeUrl);
+            // Gabungkan requestOptions (yang berisi cookie)
+            info = await ytdl.getInfo(youtubeUrl, { requestOptions });
         } catch (err) {
-            // Tangkap error 410/403/404 yang sering terjadi di environment serverless
+            // Tangkap error UnrecoverableError atau status code 410/403
+            if (err.message && err.message.includes('UnrecoverableError: Sign in')) {
+                return res.status(500).send(`
+                    <h2 style="color:red;">BLOKIR BOT YOUTUBE</h2>
+                    <p>YouTube mendeteksi aktivitas bot. Solusi: Pastikan variabel lingkungan **YOUTUBE_COOKIES** sudah terisi dengan benar. Jika sudah, cookie mungkin sudah kedaluwarsa.</p>
+                    <a href="/">Coba Lagi</a>
+                `);
+            }
             if (err.statusCode === 410 || err.statusCode === 403 || err.statusCode === 404) {
                  return res.status(500).send(`
                     <h2 style="color:red;">GAGAL MENGAMBIL INFO VIDEO</h2>
                     <p>Status code: ${err.statusCode} (Gone/Forbidden). YouTube memblokir permintaan ini.</p>
-                    <p>Coba URL video lain atau coba lagi nanti.</p>
+                    <p>Coba URL video lain atau pastikan video tidak dibatasi usia/wilayah.</p>
                     <a href="/">Coba Lagi</a>
                 `);
             }
-            throw err; // Lempar error lain
+            throw err; 
         }
         
         // Sanitasi Judul
-        // Hapus karakter yang tidak aman untuk nama file, ganti spasi dengan strip
         const title = info.videoDetails.title.replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-');
 
         let filename;
         let contentType;
-        let ytdlOptions = {};
+        // ytdlOptions diinisialisasi dengan requestOptions yang berisi cookie
+        let ytdlOptions = { requestOptions }; 
 
         // 2. Tentukan format dan opsi ytdl-core
         if (format === 'mp4') {
             filename = `${title}.mp4`;
             contentType = 'video/mp4';
-            // kualitas 'highestvideo' akan secara otomatis menggabungkan audio dan video
-            ytdlOptions = { quality: 'highestvideo' }; 
+            ytdlOptions.quality = 'highestvideo'; 
         } else { // format === 'mp3'
             filename = `${title}.mp3`;
             contentType = 'audio/mpeg';
-            // Filter hanya audio dengan kualitas tertinggi (0 adalah kualitas terbaik)
-            ytdlOptions = { filter: 'audioonly', quality: 'highestaudio' };
+            ytdlOptions.filter = 'audioonly';
+            ytdlOptions.quality = 'highestaudio';
         }
 
-        // 3. Atur Header Respon untuk Download dan Streaming
+        // 3. Atur Header Respon
         res.header('Content-Disposition', `attachment; filename="${filename}"`);
         res.header('Content-Type', contentType);
         res.header('Transfer-Encoding', 'chunked'); 
@@ -152,8 +166,6 @@ app.post('/download', async (req, res) => {
 
         downloadStream.on('error', (err) => {
             console.error('[YTDL Stream Error]:', err.message);
-            
-            // Tangani error jika belum ada header yang terkirim (di awal streaming)
             if (!res.headersSent) {
                 let errorMessage = `Gagal memproses video: ${err.message}`;
                 if (err.message.includes('Status code: 410')) {
@@ -165,17 +177,14 @@ app.post('/download', async (req, res) => {
                     <a href="/">Coba Lagi</a>
                 `);
             } else {
-                // Jika error terjadi di tengah streaming, Response sudah terkirim, jadi hanya matikan stream
                 console.log('Stream gagal setelah headers terkirim. Mengakhiri response.');
                 res.end(); 
             }
         });
 
-        // Pipe stream download ke response Express (streaming langsung)
         downloadStream.pipe(res);
 
     } catch (error) {
-        // Tangkap error yang tidak terduga
         console.error(`[Server Error]: ${error.message}`);
         res.status(500).send(`
             <h2 style="color:red;">INTERNAL SERVER ERROR</h2>
