@@ -1,15 +1,16 @@
-// website.js (Versi Serverless/Vercel)
+// website.js (Versi Serverless/Vercel - Final dan Siap Deploy)
 
 const express = require('express');
-const ytdl = require('ytdl-core'); // Pustaka Node.js murni untuk streaming
+// Menggunakan fork yang lebih stabil untuk menghindari error 410/403
+const ytdl = require('@distube/ytdl-core'); 
 const app = express();
 
-// Hapus semua: require('child_process'), require('fs'), require('path')
-// Hapus semua: DOWNLOAD_DIR, fs.mkdirSync, startServeoTunnel, main()
-
+// Middleware untuk memparsing data dari form (body)
 app.use(express.urlencoded({ extended: true }));
 
-// Endpoint Utama (Tampilan Form)
+// =================================================================
+// ENDPOINT UTAMA (FORM HTML)
+// =================================================================
 app.get('/', (req, res) => {
     res.send(`
 <!DOCTYPE html>
@@ -92,7 +93,9 @@ app.get('/', (req, res) => {
     `);
 });
 
-// Endpoint Download (Menggunakan Streaming Langsung)
+// =================================================================
+// ENDPOINT DOWNLOAD (STREAMING LANGSUNG)
+// =================================================================
 app.post('/download', async (req, res) => {
     const { youtubeUrl, format } = req.body;
 
@@ -101,10 +104,26 @@ app.post('/download', async (req, res) => {
     }
 
     try {
-        // 1. Ambil informasi video untuk mendapatkan judul
-        const info = await ytdl.getInfo(youtubeUrl);
-        // Sanitasi Judul (Hapus karakter non-alfanumerik)
-        const title = info.videoDetails.title.replace(/[^\w\s-]/g, '').trim();
+        // 1. Ambil informasi video untuk mendapatkan judul (Menggunakan try...catch tambahan)
+        let info;
+        try {
+            info = await ytdl.getInfo(youtubeUrl);
+        } catch (err) {
+            // Tangkap error 410/403/404 yang sering terjadi di environment serverless
+            if (err.statusCode === 410 || err.statusCode === 403 || err.statusCode === 404) {
+                 return res.status(500).send(`
+                    <h2 style="color:red;">GAGAL MENGAMBIL INFO VIDEO</h2>
+                    <p>Status code: ${err.statusCode} (Gone/Forbidden). YouTube memblokir permintaan ini.</p>
+                    <p>Coba URL video lain atau coba lagi nanti.</p>
+                    <a href="/">Coba Lagi</a>
+                `);
+            }
+            throw err; // Lempar error lain
+        }
+        
+        // Sanitasi Judul
+        // Hapus karakter yang tidak aman untuk nama file, ganti spasi dengan strip
+        const title = info.videoDetails.title.replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-');
 
         let filename;
         let contentType;
@@ -114,37 +133,49 @@ app.post('/download', async (req, res) => {
         if (format === 'mp4') {
             filename = `${title}.mp4`;
             contentType = 'video/mp4';
-            // Untuk MP4 (video), gunakan kualitas tertinggi yang menggabungkan audio dan video
+            // kualitas 'highestvideo' akan secara otomatis menggabungkan audio dan video
             ytdlOptions = { quality: 'highestvideo' }; 
         } else { // format === 'mp3'
             filename = `${title}.mp3`;
             contentType = 'audio/mpeg';
-            // Untuk MP3 (audio), filter hanya audio
+            // Filter hanya audio dengan kualitas tertinggi (0 adalah kualitas terbaik)
             ytdlOptions = { filter: 'audioonly', quality: 'highestaudio' };
         }
 
-        // 3. Atur Header Respon untuk Download
+        // 3. Atur Header Respon untuk Download dan Streaming
         res.header('Content-Disposition', `attachment; filename="${filename}"`);
         res.header('Content-Type', contentType);
-        res.header('Transfer-Encoding', 'chunked'); // Penting untuk streaming besar
+        res.header('Transfer-Encoding', 'chunked'); 
 
         // 4. Stream Data Video/Audio Langsung ke Klien
         const downloadStream = ytdl(youtubeUrl, ytdlOptions);
 
         downloadStream.on('error', (err) => {
-            console.error('[YTDL Error]:', err.message);
-            // Hanya kirim status error jika belum ada data yang terkirim
+            console.error('[YTDL Stream Error]:', err.message);
+            
+            // Tangani error jika belum ada header yang terkirim (di awal streaming)
             if (!res.headersSent) {
-                res.status(500).send(`Gagal memproses video: ${err.message}`);
+                let errorMessage = `Gagal memproses video: ${err.message}`;
+                if (err.message.includes('Status code: 410')) {
+                    errorMessage = `Gagal memproses video. Status code: 410 (Gone). Coba video lain.`;
+                }
+                res.status(500).send(`
+                    <h2 style="color:red;">STREAMING GAGAL</h2>
+                    <p>${errorMessage}</p>
+                    <a href="/">Coba Lagi</a>
+                `);
             } else {
-                res.end(); // Akhiri stream
+                // Jika error terjadi di tengah streaming, Response sudah terkirim, jadi hanya matikan stream
+                console.log('Stream gagal setelah headers terkirim. Mengakhiri response.');
+                res.end(); 
             }
         });
 
-        // Pipe stream download ke response Express
+        // Pipe stream download ke response Express (streaming langsung)
         downloadStream.pipe(res);
 
     } catch (error) {
+        // Tangkap error yang tidak terduga
         console.error(`[Server Error]: ${error.message}`);
         res.status(500).send(`
             <h2 style="color:red;">INTERNAL SERVER ERROR</h2>
@@ -155,6 +186,5 @@ app.post('/download', async (req, res) => {
 });
 
 
-// Export Express app untuk Vercel
+// Export Express app untuk Vercel Serverless Function
 module.exports = app;
-// Semua kode serveo.net, main(), dan app.listen() DIHAPUS.
