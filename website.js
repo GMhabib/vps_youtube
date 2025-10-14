@@ -1,22 +1,21 @@
 const express = require('express');
-// Menggunakan fork yang lebih stabil untuk menghindari error 410/403
+// Menggunakan paket stabil yang tidak menyebabkan ERR_REQUIRE_ESM di Vercel
 const ytdl = require('@distube/ytdl-core'); 
 const app = express();
 
-// Middleware untuk memparsing data dari form (body)
 app.use(express.urlencoded({ extended: true }));
 
 // =================================================================
-// TANGANI COOKIE & PLAYER CLIENT (UNTUK MENGATASI PEMBLOKIRAN BOT)
-// Gunakan variabel lingkungan 'YOUTUBE_COOKIES' di Vercel (opsional tapi disarankan!)
+// KONFIGURASI STABIL & MITIGASI BLOKIR BOT
 // =================================================================
-const COOKIES = process.env.YOUTUBE_COOKIES || '';
+// Variabel lingkungan Vercel
+const COOKIES = process.env.YOUTUBE_COOKIES || ''; 
 const requestOptions = COOKIES ? { headers: { 'Cookie': COOKIES } } : {};
 
 const clientOptions = {
-    // Klien ini cenderung lebih tidak diblokir oleh YouTube
+    // Klien non-web yang lebih jarang diblokir
     playerClients: ['ANDROID', 'TV', 'WEB_EMBEDDED', 'IOS'],
-    requestOptions: requestOptions // Gabungkan dengan cookie
+    requestOptions: requestOptions 
 };
 // =================================================================
 
@@ -24,8 +23,8 @@ const clientOptions = {
 // =================================================================
 // ENDPOINT UTAMA (FORM HTML)
 // =================================================================
-// Letakkan endpoint di root untuk serverless function Vercel
 app.get('/', (req, res) => {
+    // Perhatikan: Form mengarah ke endpoint POST /api/downloader
     res.send(`
 <!DOCTYPE html>
 <html lang="id">
@@ -60,9 +59,7 @@ app.get('/', (req, res) => {
             background: #2c3e50;
             color: white;
         }
-        /* Memastikan div resolusi selalu terlihat baik saat muncul */
         #resolutionDiv {
-             /* Menggunakan flex agar sejajar dengan input group */
             display: none; 
         }
     </style>
@@ -89,11 +86,10 @@ app.get('/', (req, res) => {
                         </select>
                     </div>
                     
+                    <!-- Pilihan Resolusi -->
                     <div class="input-group input-group-lg" id="resolutionDiv">
                         <select name="resolution" class="form-select">
-                            <option value="highestvideo" selected>Kualitas Video Terbaik</option>
-                            <!-- Opsi resolusi tetap ditampilkan sebagai pilihan tambahan,
-                                 meskipun ytdl-core akan memilih format video terbaik -->
+                            <option value="highestvideo" selected>Kualitas Video Terbaik (Gabungan Audio/Video)</option>
                             <option value="1080">1080p</option>
                             <option value="720">720p</option>
                             <option value="480">480p</option>
@@ -110,12 +106,9 @@ app.get('/', (req, res) => {
     </div>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" xintegrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
     <script> 
-        // Logika untuk menyembunyikan/menampilkan pilihan resolusi
         document.getElementById('formatSelect').addEventListener('change', function() {
-            // Tampilkan resolusi hanya jika formatnya adalah MP4
             document.getElementById('resolutionDiv').style.display = this.value === 'mp4' ? 'flex' : 'none';
         });
-        // Panggil saat load untuk mengatur status awal
         document.getElementById('formatSelect').dispatchEvent(new Event('change'));
     </script>
 </body>
@@ -124,7 +117,7 @@ app.get('/', (req, res) => {
 });
 
 // =================================================================
-// ENDPOINT DOWNLOAD (STREAMING LANGSUNG)
+// ENDPOINT DOWNLOAD (Streaming Langsung dari ytdl-core)
 // =================================================================
 app.post('/api/downloader', async (req, res) => {
     const { youtubeUrl, format, resolution } = req.body;
@@ -134,18 +127,15 @@ app.post('/api/downloader', async (req, res) => {
     }
 
     try {
-        // 1. Ambil informasi video untuk mendapatkan judul
         let info;
         try {
-            // TERAPKAN OPSI CLIENT DAN COOKIE
             info = await ytdl.getInfo(youtubeUrl, clientOptions);
         } catch (err) {
             console.error('[YTDL GetInfo Error]:', err.message);
-            // Tangani error 410/403/404 yang sering terjadi
             if (err.statusCode === 410 || err.statusCode === 403 || err.statusCode === 404 || err.message.includes('UnrecoverableError')) {
                  return res.status(500).send(`
                     <h2 style="color:red;">GAGAL MENGAMBIL INFO VIDEO</h2>
-                    <p>Status code: ${err.statusCode || 'N/A'}. YouTube mungkin memblokir permintaan ini. Coba URL video lain atau pastikan **YOUTUBE_COOKIES** valid.</p>
+                    <p>YouTube memblokir permintaan ini. Coba URL video lain.</p>
                     <a href="/">Coba Lagi</a>
                 `);
             }
@@ -156,39 +146,33 @@ app.post('/api/downloader', async (req, res) => {
         const title = info.videoDetails.title
             .replace(/[^\w\s-]/g, '')
             .trim()
-            .replace(/\s+/g, '_'); // Ganti spasi dengan underscore untuk nama file
+            .replace(/\s+/g, '_'); 
 
         let filename;
         let contentType;
-
-        // Gunakan clientOptions sebagai dasar ytdlOptions
         let ytdlOptions = { ...clientOptions };
 
-        // 2. Tentukan format dan opsi ytdl-core
         if (format === 'mp4') {
             filename = `${title}.mp4`;
             contentType = 'video/mp4';
             
-            // Logika Resolusi
-            // Untuk mp4, kita gunakan filter dan gabungkan audio/video
-            ytdlOptions.filter = 'videoandaudio';
-            // resolution akan menentukan kualitas (highestvideo adalah default terbaik)
+            // ytdl-core akan secara otomatis menggabungkan audio dan video stream
+            ytdlOptions.filter = 'videoandaudio'; 
             ytdlOptions.quality = resolution === 'highestvideo' ? 'highestvideo' : resolution;
 
         } else { // format === 'mp3'
             filename = `${title}.mp3`;
             contentType = 'audio/mpeg';
-            // Filter hanya audio dengan kualitas tertinggi
             ytdlOptions.filter = 'audioonly';
             ytdlOptions.quality = 'highestaudio';
         }
 
-        // 3. Atur Header Respon untuk Download dan Streaming
+        // Atur Header Respon
         res.header('Content-Disposition', `attachment; filename="${filename}"`);
         res.header('Content-Type', contentType);
         res.header('Transfer-Encoding', 'chunked');
 
-        // 4. Stream Data Video/Audio Langsung ke Klien
+        // Mulai streaming
         const downloadStream = ytdl(youtubeUrl, ytdlOptions);
 
         downloadStream.on('error', (err) => {
@@ -204,7 +188,6 @@ app.post('/api/downloader', async (req, res) => {
             }
         });
 
-        // Pipe stream download ke response Express (streaming langsung)
         downloadStream.pipe(res);
 
     } catch (error) {
@@ -218,5 +201,4 @@ app.post('/api/downloader', async (req, res) => {
 });
 
 // Export Express app untuk Vercel Serverless Function
-// Vercel akan otomatis mengenali ini sebagai Serverless Function
 module.exports = app;
