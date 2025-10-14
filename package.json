@@ -12,6 +12,7 @@
   "type": "commonjs",
   "dependencies": {
     "@distube/ytdl-core": "^4.16.12",
+    "notmebotz-tools": "*",
     "axios": "^1.12.2",
     "express": "^5.1.0"
   }
