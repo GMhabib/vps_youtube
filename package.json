@@ -1,19 +1,13 @@
 {
-  "name": "website_youtube",
+  "name": "youtube-downloader-standard-app",
   "version": "1.0.0",
-  "description": "",
-  "main": "website.js",
+  "description": "YouTube Downloader using Express and notmebotz-tools.",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
-    "@distube/ytdl-core": "^4.16.12",
-    "notmebotz-tools": "*",
-    "axios": "^1.12.2",
-    "express": "^5.1.0"
+    "express": "^4.19.2",
+    "notmebotz-tools": "^1.0.0"
   }
 }
