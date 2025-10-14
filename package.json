@@ -1,13 +1,13 @@
 {
-  "name": "youtube-downloader-standard-app",
+  "name": "youtube-downloader-stable-vercel",
   "version": "1.0.0",
-  "description": "YouTube Downloader using Express and notmebotz-tools.",
-  "main": "server.js",
+  "description": "Stable YouTube Downloader using Express and @distube/ytdl-core for Vercel.",
+  "main": "api/downloader.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node api/downloader.js"
   },
   "dependencies": {
     "express": "^4.19.2",
-    "notmebotz-tools": "^1.0.0"
+    "@distube/ytdl-core": "^4.13.1"
   }
 }
