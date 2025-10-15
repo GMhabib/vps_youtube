@@ -1,30 +1,33 @@
 const express = require('express');
-// Menggunakan paket stabil yang tidak menyebabkan ERR_REQUIRE_ESM di Vercel
+// Menggunakan library ytdl-core yang stabil untuk streaming download
 const ytdl = require('@distube/ytdl-core'); 
-const app = express();
 
+const app = express();
+// Server akan berjalan di port 3000 secara default, atau dari variabel lingkungan PORT
+const PORT = process.env.PORT || 3000; 
+
+// Middleware untuk memparsing data dari form (body)
 app.use(express.urlencoded({ extended: true }));
 
 // =================================================================
-// KONFIGURASI STABIL & MITIGASI BLOKIR BOT
+// KONFIGURASI YTDL CORE (Opsional: untuk mitigasi pemblokiran bot)
 // =================================================================
-// Variabel lingkungan Vercel
+// Gunakan variabel lingkungan YOUTUBE_COOKIES jika tersedia
 const COOKIES = process.env.YOUTUBE_COOKIES || ''; 
 const requestOptions = COOKIES ? { headers: { 'Cookie': COOKIES } } : {};
 
 const clientOptions = {
-    // Klien non-web yang lebih jarang diblokir
+    // Klien yang berbeda untuk meniru permintaan non-web
     playerClients: ['ANDROID', 'TV', 'WEB_EMBEDDED', 'IOS'],
     requestOptions: requestOptions 
 };
 // =================================================================
 
-
 // =================================================================
-// ENDPOINT UTAMA (FORM HTML)
+// ENDPOINT UTAMA (Menampilkan Form HTML)
 // =================================================================
 app.get('/', (req, res) => {
-    // Perhatikan: Form mengarah ke endpoint POST /api/downloader
+    // Tampilan HTML (tidak diubah sesuai permintaan)
     res.send(`
 <!DOCTYPE html>
 <html lang="id">
@@ -71,7 +74,7 @@ app.get('/', (req, res) => {
                 <i class="bi bi-youtube display-4 mb-3 text-danger"></i>
                 <h1 class="fw-bold mb-3">YouTube Downloader</h1>
                 <p class="mb-4">Tempelkan link video YouTube untuk memulai.</p>
-                <form action="/api/downloader" method="POST">
+                <form action="/download" method="POST">
                     <div class="input-group input-group-lg mb-4">
                         <span class="input-group-text bg-transparent border-end-0">
                             <i class="bi bi-link-45deg text-white"></i>
@@ -106,6 +109,7 @@ app.get('/', (req, res) => {
     </div>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" xintegrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
     <script> 
+        // Logika untuk menyembunyikan/menampilkan pilihan resolusi
         document.getElementById('formatSelect').addEventListener('change', function() {
             document.getElementById('resolutionDiv').style.display = this.value === 'mp4' ? 'flex' : 'none';
         });
@@ -117,32 +121,35 @@ app.get('/', (req, res) => {
 });
 
 // =================================================================
-// ENDPOINT DOWNLOAD (Streaming Langsung dari ytdl-core)
+// ENDPOINT DOWNLOAD (Streaming Langsung ke Klien)
 // =================================================================
-app.post('/api/downloader', async (req, res) => {
+app.post('/download', async (req, res) => {
     const { youtubeUrl, format, resolution } = req.body;
 
+    // 1. Validasi URL
     if (!ytdl.validateURL(youtubeUrl)) {
         return res.status(400).send('URL YouTube tidak valid.');
     }
 
     try {
+        // 2. Ambil informasi video untuk judul
         let info;
         try {
             info = await ytdl.getInfo(youtubeUrl, clientOptions);
         } catch (err) {
             console.error('[YTDL GetInfo Error]:', err.message);
+            // Tangani error pemblokiran atau video dihapus (410, 403, dll)
             if (err.statusCode === 410 || err.statusCode === 403 || err.statusCode === 404 || err.message.includes('UnrecoverableError')) {
                  return res.status(500).send(`
                     <h2 style="color:red;">GAGAL MENGAMBIL INFO VIDEO</h2>
-                    <p>YouTube memblokir permintaan ini. Coba URL video lain.</p>
+                    <p>YouTube mungkin memblokir permintaan ini atau video telah dihapus.</p>
                     <a href="/">Coba Lagi</a>
                 `);
             }
             throw err; 
         }
 
-        // Sanitasi Judul
+        // 3. Sanitasi dan Buat Judul File
         const title = info.videoDetails.title
             .replace(/[^\w\s-]/g, '')
             .trim()
@@ -152,31 +159,34 @@ app.post('/api/downloader', async (req, res) => {
         let contentType;
         let ytdlOptions = { ...clientOptions };
 
+        // 4. Konfigurasi Opsi Download berdasarkan Format
         if (format === 'mp4') {
             filename = `${title}.mp4`;
             contentType = 'video/mp4';
             
-            // ytdl-core akan secara otomatis menggabungkan audio dan video stream
+            // Filter video dan audio untuk MP4. ytdl-core akan menggabungkan stream.
             ytdlOptions.filter = 'videoandaudio'; 
             ytdlOptions.quality = resolution === 'highestvideo' ? 'highestvideo' : resolution;
 
         } else { // format === 'mp3'
             filename = `${title}.mp3`;
             contentType = 'audio/mpeg';
+            // Filter hanya audio dengan kualitas tertinggi
             ytdlOptions.filter = 'audioonly';
             ytdlOptions.quality = 'highestaudio';
         }
 
-        // Atur Header Respon
+        // 5. Atur Header Respon agar browser mendownload file
         res.header('Content-Disposition', `attachment; filename="${filename}"`);
         res.header('Content-Type', contentType);
         res.header('Transfer-Encoding', 'chunked');
 
-        // Mulai streaming
+        // 6. Mulai Streaming
         const downloadStream = ytdl(youtubeUrl, ytdlOptions);
 
         downloadStream.on('error', (err) => {
             console.error('[YTDL Stream Error]:', err.message);
+            // Jika error terjadi sebelum header terkirim
             if (!res.headersSent) {
                 res.status(500).send(`
                     <h2 style="color:red;">STREAMING GAGAL</h2>
@@ -184,10 +194,12 @@ app.post('/api/downloader', async (req, res) => {
                     <a href="/">Coba Lagi</a>
                 `);
             } else {
+                // Jika error terjadi di tengah streaming, matikan koneksi
                 res.end();
             }
         });
 
+        // Pipe stream download ke response Express (streaming langsung)
         downloadStream.pipe(res);
 
     } catch (error) {
@@ -200,5 +212,11 @@ app.post('/api/downloader', async (req, res) => {
     }
 });
 
-// Export Express app untuk Vercel Serverless Function
-module.exports = app;
+// =================================================================
+// START SERVER (Non-Serverless)
+// =================================================================
+app.listen(PORT, () => {
+    console.log(`Server berjalan di http://localhost:${PORT}`);
+    console.log('Pastikan Anda menjalankan: npm install');
+    console.log('Lalu jalankan: node server.js');
+});
